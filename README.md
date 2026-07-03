@@ -1,6 +1,6 @@
 # zkml-poc
 
-A minimal proof-of-concept for **zero-knowledge machine learning (ZKML)**: train a small digit classifier, serve it via a **hosted API (Pattern A)**, and later export to ONNX for proving with [EZKL](https://github.com/zkonduit/ezkl).
+A minimal proof-of-concept for **zero-knowledge machine learning (ZKML)**: train a small digit classifier, serve it via a **hosted API (Pattern A)**, export to ONNX, and prove inference with [EZKL](https://github.com/zkonduit/ezkl).
 
 The model uses only `Linear` and `ReLU` layers so the graph stays circuit-friendly.
 
@@ -8,8 +8,9 @@ The model uses only `Linear` and `ReLU` layers so the graph stays circuit-friend
 
 - Trains an MLP on scikit-learn's 8×8 handwritten digits (0–9)
 - Saves **two** weight tiers: `digit_mlp_free.pth` (25 epochs) and `digit_mlp_premium.pth` (150 epochs)
+- Exports each tier to ONNX (`digit_mlp_{tier}.onnx`) with EZKL-ready sample inputs
 - Routes `X-API-Key` → free or premium model at inference time
-- Golden-sample test before ONNX / ZKML
+- Golden-sample tests for PyTorch inference and ONNX parity
 
 ## Project structure
 
@@ -22,7 +23,8 @@ zkml-poc/
 │   ├── schemas.py            # Request/response models
 │   └── config.py             # Tier paths + API key mapping
 ├── training/
-│   └── train.py              # Train free + premium weights
+│   ├── train.py              # Train free + premium weights
+│   └── export_onnx.py        # Export .pth → .onnx + verify parity
 ├── tests/
 │   ├── test_pipeline.py      # Golden-sample sanity check
 │   └── fixtures/
@@ -30,8 +32,12 @@ zkml-poc/
 │       ├── expected_output.json
 │       └── test_sample_preview.png
 ├── artifacts/
-│   ├── digit_mlp_free.pth     # Free tier weights
-│   └── digit_mlp_premium.pth  # Premium tier weights
+│   ├── digit_mlp_free.pth       # Free tier PyTorch weights
+│   ├── digit_mlp_premium.pth    # Premium tier PyTorch weights
+│   ├── digit_mlp_free.onnx      # Free tier ONNX graph (for EZKL / onnxruntime)
+│   ├── digit_mlp_premium.onnx   # Premium tier ONNX graph
+│   ├── input_free.json          # Sample input (EZKL witness format)
+│   └── input_premium.json       # Sample input (EZKL witness format)
 ├── docs/
 │   └── API.md                # How end users call the API
 ├── requirements.txt
@@ -66,6 +72,16 @@ python -m training.train
 ```bash
 python -m tests.test_pipeline
 ```
+
+### Export ONNX
+
+After training, export both tiers to ONNX and verify they match PyTorch on the golden sample:
+
+```bash
+python -m training.export_onnx
+```
+
+This writes `artifacts/digit_mlp_{tier}.onnx` and `artifacts/input_{tier}.json` for each tier.
 
 ### Run API
 
@@ -104,6 +120,24 @@ Input (64) → Linear(64→32) → ReLU → Linear(32→16) → ReLU → Linear(
 | No final Softmax | `argmax(logits)` suffices; softmax is expensive to prove |
 | Normalization `/ 16.0` | Maps pixels (0–16) to `[0, 1]` |
 
+## ONNX export
+
+`training/export_onnx.py` loads each tier's `.pth` weights, traces `DigitMLP` with `torch.onnx.export`, and checks parity with onnxruntime on the golden fixture.
+
+| Artifact | Description |
+|----------|-------------|
+| `digit_mlp_{tier}.onnx` | Portable model graph + embedded weights. Input: `input` `[batch, 64]`. Output: `logits` `[batch, 10]`. |
+| `input_{tier}.json` | Sample pixels in EZKL format: `{"input_data": [[64 floats]]}`. |
+
+The API still runs PyTorch (`.pth`) at inference time. ONNX is the interchange format for EZKL proving and optional onnxruntime deployment. Softmax is applied only in the API for confidence display — the ONNX graph exports raw logits.
+
+Re-export after retraining:
+
+```bash
+python -m training.train
+python -m training.export_onnx
+```
+
 ## Pattern A — what stays private
 
 | Private (server) | Public (users) |
@@ -111,13 +145,14 @@ Input (64) → Linear(64→32) → ReLU → Linear(32→16) → ReLU → Linear(
 | `artifacts/*.pth` | `POST /predict` + tier in response |
 | `app/model.py` | Request/response schema in docs |
 | `training/` | `GET /health` |
+| — | `artifacts/*.onnx` (shareable for off-server EZKL verification) |
 
 ## Roadmap
 
 - [x] Step 1 — Circuit-friendly `DigitMLP`
 - [x] Step 2 — Train + golden test
 - [x] Step 2b — Pattern A HTTP API
-- [ ] Step 3 — ONNX export
+- [x] Step 3 — ONNX export
 - [ ] Step 4 — EZKL proofs
 
 ## Troubleshooting
@@ -126,6 +161,8 @@ Input (64) → Linear(64→32) → ReLU → Linear(32→16) → ReLU → Linear(
 |---------|-----|
 | `python` not found | Use `python3` or activate `.venv` |
 | Weights not found | `python -m training.train` |
+| ONNX export fails | Run `pip install -r requirements.txt` (needs `onnx`, `onnxscript`, `onnxruntime`) |
+| ONNX verify FAIL | Re-run `python -m training.train` then `python -m training.export_onnx` |
 | `test_pipeline` FAIL | Check `/16.0` normalization and retrain |
 | `401` on `/predict` | Send valid `X-API-Key` matching `FREE_API_KEY` or `PREMIUM_API_KEY` |
 

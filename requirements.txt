@@ -4,3 +4,6 @@ numpy
 fastapi
 uvicorn[standard]
 python-dotenv
+onnx
+onnxscript
+onnxruntime
