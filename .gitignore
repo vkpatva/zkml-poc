@@ -15,3 +15,7 @@ venv/
 # Secrets
 .env
 .env.*
+
+# EZKL generated artifacts (run python -m proving.setup_ezkl locally)
+ezkl/**/*
+!ezkl/.gitkeep

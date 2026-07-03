@@ -10,14 +10,14 @@ The model uses only `Linear` and `ReLU` layers so the graph stays circuit-friend
 - Saves **two** weight tiers: `digit_mlp_free.pth` (25 epochs) and `digit_mlp_premium.pth` (150 epochs)
 - Exports each tier to ONNX (`digit_mlp_{tier}.onnx`) with EZKL-ready sample inputs
 - Routes `X-API-Key` → free or premium model at inference time
-- Golden-sample tests for PyTorch inference and ONNX parity
+- Golden-sample tests for PyTorch inference, ONNX parity, and optional EZKL proofs
 
 ## Project structure
 
 ```
 zkml-poc/
 ├── app/                      # Hosted API (Pattern A)
-│   ├── main.py               # FastAPI app — POST /predict
+│   ├── main.py               # FastAPI — /predict, /prove, /verify
 │   ├── inference.py          # Load weights + run inference
 │   ├── model.py              # DigitMLP architecture (private on server)
 │   ├── schemas.py            # Request/response models
@@ -25,8 +25,14 @@ zkml-poc/
 ├── training/
 │   ├── train.py              # Train free + premium weights
 │   └── export_onnx.py        # Export .pth → .onnx + verify parity
+├── proving/
+│   ├── setup_ezkl.py         # One-time EZKL setup per tier + visibility
+│   ├── prove_inference.py    # CLI prove / verify
+│   ├── ezkl_core.py          # setup_tier, prove_pixels, verify_proof_payload
+│   └── ezkl_paths.py         # Paths, model_id, vk_hash
 ├── tests/
 │   ├── test_pipeline.py      # Golden-sample sanity check
+│   ├── test_ezkl.py          # EZKL prove/verify (requires local setup)
 │   └── fixtures/
 │       ├── test_input.json
 │       ├── expected_output.json
@@ -39,7 +45,9 @@ zkml-poc/
 │   ├── input_free.json          # Sample input (EZKL witness format)
 │   └── input_premium.json       # Sample input (EZKL witness format)
 ├── docs/
-│   └── API.md                # How end users call the API
+│   ├── API.md                # HTTP API (/predict, /prove, /verify)
+│   └── ZK.md                 # EZKL scenarios, setup, limitations
+├── ezkl/                     # Generated locally (gitignored)
 ├── requirements.txt
 └── README.md
 ```
@@ -47,7 +55,7 @@ zkml-poc/
 ## Requirements
 
 - Python 3.10+ (tested on 3.12)
-- ~2 GB disk for PyTorch
+- ~2 GB disk for PyTorch; extra space for EZKL artifacts under `ezkl/`
 
 On Ubuntu/Debian use `python3` if `python` is not installed.
 
@@ -82,6 +90,22 @@ python -m training.export_onnx
 ```
 
 This writes `artifacts/digit_mlp_{tier}.onnx` and `artifacts/input_{tier}.json` for each tier.
+
+### EZKL setup (one-time per tier + visibility)
+
+See **[docs/ZK.md](docs/ZK.md)** for scenarios, limitations, and full guide.
+
+```bash
+python -m proving.setup_ezkl --tier premium --visibility public
+python -m proving.setup_ezkl --tier premium --visibility private
+```
+
+### Prove (CLI)
+
+```bash
+python -m proving.prove_inference --tier premium --visibility public
+python -m tests.test_ezkl   # optional; skips if ezkl/ not set up
+```
 
 ### Run API
 
@@ -138,14 +162,29 @@ python -m training.train
 python -m training.export_onnx
 ```
 
+## ZK proofs (EZKL)
+
+Three scenarios are supported — see **[docs/ZK.md](docs/ZK.md)**:
+
+1. **Correct inference** — auditable proof that logits are right (`visibility: public`)
+2. **Specific model** — proof binds to tier via unique `vk_hash` (`X-API-Key` → tier)
+3. **Private input** — prove without revealing pixels (`visibility: private`)
+
+```bash
+curl -X POST http://localhost:8000/prove \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-premium-key" \
+  -d '{"pixels": [0.0, 0.125, ...], "visibility": "public"}'
+```
+
 ## Pattern A — what stays private
 
 | Private (server) | Public (users) |
 |------------------|----------------|
-| `artifacts/*.pth` | `POST /predict` + tier in response |
+| `artifacts/*.pth`, `*.onnx` | `POST /predict`, `/prove` responses |
+| `ezkl/**/pk.key`, `network.ezkl` | `vk_hash`, `proof`, `model_id` |
 | `app/model.py` | Request/response schema in docs |
-| `training/` | `GET /health` |
-| — | `artifacts/*.onnx` (shareable for off-server EZKL verification) |
+| `training/`, `proving/` | `GET /health` |
 
 ## Roadmap
 
@@ -153,7 +192,7 @@ python -m training.export_onnx
 - [x] Step 2 — Train + golden test
 - [x] Step 2b — Pattern A HTTP API
 - [x] Step 3 — ONNX export
-- [ ] Step 4 — EZKL proofs
+- [x] Step 4 — EZKL proofs
 
 ## Troubleshooting
 
@@ -165,6 +204,8 @@ python -m training.export_onnx
 | ONNX verify FAIL | Re-run `python -m training.train` then `python -m training.export_onnx` |
 | `test_pipeline` FAIL | Check `/16.0` normalization and retrain |
 | `401` on `/predict` | Send valid `X-API-Key` matching `FREE_API_KEY` or `PREMIUM_API_KEY` |
+| `503` on `/prove` | Run `python -m proving.setup_ezkl --tier <tier> --visibility <vis>` |
+| `test_ezkl` skipped | EZKL not set up locally — see docs/ZK.md |
 
 ## License
 
