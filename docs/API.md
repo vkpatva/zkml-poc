@@ -16,6 +16,8 @@ Send the matching key as header `X-API-Key`. The response includes `"tier": "fre
 ## Prerequisites
 
 - Both weight files exist (`python -m training.train`)
+- ONNX exported (`python -m training.export_onnx`)
+- EZKL set up for tiers you want to prove — see **[ZK.md](ZK.md)**
 - Copy `.env.example` → `.env` and set keys for production
 
 ## Start the server
@@ -96,6 +98,72 @@ Example response:
 }
 ```
 
+### `POST /prove`
+
+Generate a **ZK-SNARK proof** that inference is correct. Same `pixels` and tier auth as `/predict`. **Slow** (~30–120 s).
+
+See **[ZK.md](ZK.md)** for the three scenarios (audit, model binding, private input).
+
+**Request body**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pixels` | `float[64]` | required | Same as `/predict` |
+| `visibility` | `"public"` \| `"private"` | `"public"` | `public` = audit (input visible); `private` = hide pixels |
+
+**Response**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `digit` | `int` | `argmax` of EZKL logits |
+| `logits` | `float[10]` | Circuit outputs (fixed-point) |
+| `tier` | `string` | `free` or `premium` |
+| `visibility` | `string` | Profile used |
+| `model_id` | `string` | e.g. `digit_mlp_premium_public_audit` |
+| `vk_hash` | `string` | SHA-256 of verifier key — pin to trust model M |
+| `scenario` | `string` | `correct_inference_audit` or `private_input_proof` |
+| `verified` | `bool` | Server verified proof immediately after generation |
+| `proof` | `object` | Share with verifiers |
+
+**Scenario 1 / 2 — public audit (premium)**
+
+```bash
+curl -X POST http://localhost:8000/prove \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-premium-key" \
+  -d '{"pixels": [0.0, 0.125, ...], "visibility": "public"}'
+```
+
+**Scenario 3 — private input**
+
+```bash
+curl -X POST http://localhost:8000/prove \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-premium-key" \
+  -d '{"pixels": [0.0, 0.125, ...], "visibility": "private"}'
+```
+
+### `POST /verify`
+
+Verify a `proof` object from `/prove`. No API key required (verifier only needs local `vk.key` from setup).
+
+```bash
+curl -X POST http://localhost:8000/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proof": { "instances": [...], "proof": "0x..." },
+    "tier": "premium",
+    "visibility": "public"
+  }'
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `verified` | `bool` | Cryptographic check passed |
+| `model_id` | `string` | Expected model profile |
+| `vk_hash` | `string` | Compare to your approved registry |
+| `scenario` | `string` | Which visibility profile was used |
+
 ## Python client
 
 ```python
@@ -122,10 +190,13 @@ print(data["tier"], data["digit"], data["confidence"])
 | `401` | Missing or invalid `X-API-Key` when keys are configured |
 | `422` | Wrong pixel count or out-of-range values |
 | `500` | Weights missing — run `python -m training.train` |
+| `503` | EZKL not set up for tier/visibility — see [ZK.md](ZK.md) |
 
 ## What users do **not** get
 
 - `artifacts/digit_mlp_free.pth` / `digit_mlp_premium.pth`
-- `app/model.py`, `training/`
+- `artifacts/*.onnx`
+- `ezkl/**/pk.key`, `network.ezkl`
+- `app/model.py`, `training/`, `proving/`
 
-Users only need an API key (tier) and this document.
+Users receive API responses and portable **proofs** (`proof`, `vk_hash`, `model_id`). See [ZK.md](ZK.md).
