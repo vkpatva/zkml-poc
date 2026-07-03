@@ -1,0 +1,19 @@
+{
+  "true_label": 2,
+  "expected_argmax_index": 2,
+  "note": "true_label/expected_argmax_index is the ground-truth digit for this sample from the dataset itself -- this is what a correctly trained model should output as argmax(logits), regardless of exact weight values. reference_model_* below is from a quick sklearn MLP(32,16) trained separately just to confirm the sample is easy to classify -- it is NOT the model you will build/export, so don't expect your logits to match it exactly.",
+  "reference_model_predicted_class": 2,
+  "reference_model_probabilities": [
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "reference_model_test_accuracy": 0.9722
+}
